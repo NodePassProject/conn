@@ -30,7 +30,9 @@ package main
 import (
     "fmt"
     "net"
-    
+    "time"
+    "io"
+
     "github.com/NodePassProject/conn"
 )
 
@@ -41,20 +43,21 @@ func main() {
         fmt.Printf("Failed to connect to server1: %v\n", err)
         return
     }
-    
+    defer conn1.Close()
+
     conn2, err := net.Dial("tcp", "server2.example.com:9090")
     if err != nil {
         fmt.Printf("Failed to connect to server2: %v\n", err)
-        conn1.Close()
         return
     }
-    
-    // Exchange data between the two connections
-    bytesAtoB, bytesBtoA, err := conn.DataExchange(conn1, conn2)
+    defer conn2.Close()
+
+    // Exchange data between the two connections with a 5-second idle timeout
+    bytesAtoB, bytesBtoA, err := conn.DataExchange(conn1, conn2, 5*time.Second)
     if err != nil && err != io.EOF {
         fmt.Printf("Data exchange error: %v\n", err)
     }
-    
+
     fmt.Printf("Transferred %d bytes from server1 to server2\n", bytesAtoB)
     fmt.Printf("Transferred %d bytes from server2 to server1\n", bytesBtoA)
 }
@@ -119,4 +122,4 @@ func main() {
 ## License
 
 Copyright (c) 2025, NodePassProject. Licensed under the BSD 3-Clause License.
-See the [LICENSE](./LICENSE) file for details.
+See the [LICENSE](LICENSE) file for details.
