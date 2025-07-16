@@ -10,14 +10,14 @@ import (
 
 // TimeoutReader 包装了 net.Conn，支持设置读取超时
 type TimeoutReader struct {
-	net.Conn
-	timeout time.Duration
+	Conn    net.Conn
+	Timeout time.Duration
 }
 
 // Read 实现了 io.Reader 接口，读取数据时会设置读取超时
 func (tr *TimeoutReader) Read(b []byte) (int, error) {
-	if tr.timeout > 0 {
-		tr.Conn.SetReadDeadline(time.Now().Add(tr.timeout))
+	if tr.Timeout > 0 {
+		tr.Conn.SetReadDeadline(time.Now().Add(tr.Timeout))
 	}
 	return tr.Conn.Read(b)
 }
@@ -38,7 +38,7 @@ func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration) (int64, int6
 	// 定义一个函数用于双向数据传输
 	copyData := func(src, dst net.Conn, sum *int64) {
 		defer wg.Done()
-		reader := &TimeoutReader{Conn: src, timeout: idleTimeout}
+		reader := &TimeoutReader{Conn: src, Timeout: idleTimeout}
 		n, err := io.Copy(dst, reader)
 		*sum = n
 		errChan <- err
