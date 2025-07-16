@@ -3,16 +3,14 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/NodePassProject/conn.svg)](https://pkg.go.dev/github.com/NodePassProject/conn)
 [![License](https://img.shields.io/badge/License-BSD_3--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
-A flexible and efficient network connection exchange system for Go applications.
+A simple and efficient TCP connection data exchange utility for Go applications.
 
 ## Features
 
-- Thread-safe data exchange between TCP connections
-- Bidirectional data transfer with proper connection state management
-- Support for UDP to TCP data transfer
-- Automatic connection handling and cleanup
-- Configurable buffer sizes and timeouts
+- Thread-safe, bidirectional data exchange between two TCP connections
+- Idle timeout support for automatic connection cleanup
 - Efficient error handling and resource management
+- `TimeoutReader` for per-read timeout control
 
 ## Installation
 
@@ -63,60 +61,14 @@ func main() {
 }
 ```
 
-### UDP to TCP Data Transfer
+### TimeoutReader
+
+`TimeoutReader` is a wrapper for `net.Conn` that allows you to set a read timeout for each read operation. It is used internally by `DataExchange`, but can also be used directly if needed:
 
 ```go
-package main
-
-import (
-    "fmt"
-    "net"
-    "time"
-    
-    "github.com/NodePassProject/conn"
-)
-
-func main() {
-    // Create a UDP connection
-    udpConn, err := net.ListenUDP("udp", &net.UDPAddr{Port: 5000})
-    if err != nil {
-        fmt.Printf("Failed to create UDP socket: %v\n", err)
-        return
-    }
-    defer udpConn.Close()
-    
-    // Create a TCP connection
-    tcpConn, err := net.Dial("tcp", "example.com:8080")
-    if err != nil {
-        fmt.Printf("Failed to connect to TCP server: %v\n", err)
-        return
-    }
-    defer tcpConn.Close()
-    
-    // UDP client address (for responses)
-    udpAddr, _ := net.ResolveUDPAddr("udp", "client.example.com:6000")
-    
-    // Initial data received from UDP client
-    initialData := []byte("Hello from UDP client")
-    
-    // Transfer data between UDP and TCP with a 5-second timeout
-    udpToTcp, tcpToUdp, err := conn.DataTransfer(
-        udpConn,
-        tcpConn,
-        udpAddr,
-        initialData,
-        4096,  // buffer size
-        5*time.Second,  // timeout
-    )
-    
-    if err != nil {
-        fmt.Printf("Data transfer error: %v\n", err)
-        return
-    }
-    
-    fmt.Printf("Transferred %d bytes from UDP to TCP\n", udpToTcp)
-    fmt.Printf("Transferred %d bytes from TCP to UDP\n", tcpToUdp)
-}
+tr := &conn.TimeoutReader{Conn: tcpConn, timeout: 5 * time.Second}
+buf := make([]byte, 4096)
+n, err := tr.Read(buf)
 ```
 
 ## License
