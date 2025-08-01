@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,57 @@ func (tr *TimeoutReader) Read(b []byte) (int, error) {
 		tr.Conn.SetReadDeadline(time.Now().Add(tr.Timeout))
 	}
 	return tr.Conn.Read(b)
+}
+
+// StatConn 是一个包装了 net.Conn 的结构体，用于统计读取和写入的字节数
+type StatConn struct {
+	Conn net.Conn
+	RX   *uint64
+	TX   *uint64
+}
+
+// Read 实现了 io.Reader 接口，读取数据时会统计读取字节数
+func (sc *StatConn) Read(b []byte) (int, error) {
+	n, err := sc.Conn.Read(b)
+	atomic.AddUint64(sc.RX, uint64(n))
+	return n, err
+}
+
+// Write 实现了 io.Writer 接口，写入数据时会统计写入字节数
+func (sc *StatConn) Write(b []byte) (int, error) {
+	n, err := sc.Conn.Write(b)
+	atomic.AddUint64(sc.TX, uint64(n))
+	return n, err
+}
+
+// Close 关闭连接
+func (sc *StatConn) Close() error {
+	return sc.Conn.Close()
+}
+
+// LocalAddr 返回本地地址
+func (sc *StatConn) LocalAddr() net.Addr {
+	return sc.Conn.LocalAddr()
+}
+
+// RemoteAddr 返回远程地址
+func (sc *StatConn) RemoteAddr() net.Addr {
+	return sc.Conn.RemoteAddr()
+}
+
+// SetDeadline 设置连接的读写超时
+func (sc *StatConn) SetDeadline(t time.Time) error {
+	return sc.Conn.SetDeadline(t)
+}
+
+// SetReadDeadline 设置连接的读取超时
+func (sc *StatConn) SetReadDeadline(t time.Time) error {
+	return sc.Conn.SetReadDeadline(t)
+}
+
+// SetWriteDeadline 设置连接的写入超时
+func (sc *StatConn) SetWriteDeadline(t time.Time) error {
+	return sc.Conn.SetWriteDeadline(t)
 }
 
 // DataExchange 实现两个 net.Conn 之间的双向数据交换，支持空闲超时

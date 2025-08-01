@@ -11,6 +11,7 @@ A simple and efficient TCP connection data exchange utility for Go applications.
 - Idle timeout support for automatic connection cleanup
 - Efficient error handling and resource management
 - `TimeoutReader` for per-read timeout control
+- `StatConn` for connection statistics tracking (RX/TX bytes)
 
 ## Installation
 
@@ -66,9 +67,35 @@ func main() {
 `TimeoutReader` is a wrapper for `net.Conn` that allows you to set a read timeout for each read operation. It is used internally by `DataExchange`, but can also be used directly if needed:
 
 ```go
-tr := &conn.TimeoutReader{Conn: tcpConn, timeout: 5 * time.Second}
+import "github.com/NodePassProject/conn"
+
+tr := &conn.TimeoutReader{Conn: tcpConn, Timeout: 5 * time.Second}
 buf := make([]byte, 4096)
 n, err := tr.Read(buf)
+```
+
+### StatConn
+
+`StatConn` is a wrapper for `net.Conn` that tracks connection statistics (received and transmitted bytes). It implements the `net.Conn` interface and can be used as a drop-in replacement:
+
+```go
+import (
+    "sync/atomic"
+    "github.com/NodePassProject/conn"
+)
+
+var rxBytes, txBytes uint64
+statConn := &conn.StatConn{
+    Conn: tcpConn,
+    RX:   &rxBytes,
+    TX:   &txBytes,
+}
+
+// Use statConn like a normal net.Conn
+// The rxBytes and txBytes variables will be updated automatically
+n, err := statConn.Write(data)
+fmt.Printf("Total bytes sent: %d\n", atomic.LoadUint64(&txBytes))
+fmt.Printf("Total bytes received: %d\n", atomic.LoadUint64(&rxBytes))
 ```
 
 ## License
