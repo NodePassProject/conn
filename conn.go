@@ -1,4 +1,4 @@
-// Package conn 提供两条TCP连接之间双向数据交换功能
+// Package conn 对 net.Conn 的扩展，包括超时读取、限速统计和双向数据交换等功能
 package conn
 
 import (
@@ -75,6 +75,54 @@ func (rl *RateLimiter) WaitWrite(bytes int64) {
 	rl.waitTokens(bytes, &rl.writeTokens)
 }
 
+// SetRate 动态调整读写速率
+func (rl *RateLimiter) SetRate(readBytesPerSecond, writeBytesPerSecond int64) {
+	if rl == nil {
+		return
+	}
+
+	// 如果某个速率为0，设置为无限制
+	if readBytesPerSecond <= 0 {
+		readBytesPerSecond = 1 << 40 // 1TB/s
+	}
+	if writeBytesPerSecond <= 0 {
+		writeBytesPerSecond = 1 << 40 // 1TB/s
+	}
+
+	rl.condition.L.Lock()
+	defer rl.condition.L.Unlock()
+
+	atomic.StoreInt64(&rl.readRate, readBytesPerSecond)
+	atomic.StoreInt64(&rl.writeRate, writeBytesPerSecond)
+
+	// 重新填充令牌桶
+	atomic.StoreInt64(&rl.readTokens, readBytesPerSecond)
+	atomic.StoreInt64(&rl.writeTokens, writeBytesPerSecond)
+
+	// 唤醒所有等待的协程
+	rl.condition.Broadcast()
+}
+
+// Reset 重置限速器状态
+func (rl *RateLimiter) Reset() {
+	if rl == nil {
+		return
+	}
+
+	rl.condition.L.Lock()
+	defer rl.condition.L.Unlock()
+
+	// 重置令牌数量为当前速率
+	readRate := atomic.LoadInt64(&rl.readRate)
+	writeRate := atomic.LoadInt64(&rl.writeRate)
+
+	atomic.StoreInt64(&rl.readTokens, readRate)
+	atomic.StoreInt64(&rl.writeTokens, writeRate)
+	atomic.StoreInt64(&rl.lastUpdate, time.Now().UnixNano())
+
+	rl.condition.Broadcast()
+}
+
 // waitTokens 等待令牌
 func (rl *RateLimiter) waitTokens(bytes int64, tokens *int64) {
 	if rl == nil || bytes <= 0 {
@@ -137,6 +185,16 @@ type StatConn struct {
 	Rate *RateLimiter
 }
 
+// NewStatConn 创建一个新的 StatConn
+func NewStatConn(conn net.Conn, rx, tx *uint64, rate *RateLimiter) *StatConn {
+	return &StatConn{
+		Conn: conn,
+		RX:   rx,
+		TX:   tx,
+		Rate: rate,
+	}
+}
+
 // Read 实现了 io.Reader 接口，读取数据时会统计读取字节数并进行限速
 func (sc *StatConn) Read(b []byte) (int, error) {
 	n, err := sc.Conn.Read(b)
@@ -189,6 +247,37 @@ func (sc *StatConn) SetReadDeadline(t time.Time) error {
 // SetWriteDeadline 设置连接的写入超时
 func (sc *StatConn) SetWriteDeadline(t time.Time) error {
 	return sc.Conn.SetWriteDeadline(t)
+}
+
+// GetConn 返回底层的 net.Conn
+func (sc *StatConn) GetConn() net.Conn {
+	return sc.Conn
+}
+
+// GetRate 返回当前的限速
+func (sc *StatConn) GetRate() *RateLimiter {
+	return sc.Rate
+}
+
+// GetRX 返回已接收的字节数
+func (sc *StatConn) GetRX() uint64 {
+	return atomic.LoadUint64(sc.RX)
+}
+
+// GetTX 返回已发送的字节数
+func (sc *StatConn) GetTX() uint64 {
+	return atomic.LoadUint64(sc.TX)
+}
+
+// GetTotal 返回总的传输字节数
+func (sc *StatConn) GetTotal() uint64 {
+	return sc.GetRX() + sc.GetTX()
+}
+
+// Reset 重置统计数据
+func (sc *StatConn) Reset() {
+	atomic.StoreUint64(sc.RX, 0)
+	atomic.StoreUint64(sc.TX, 0)
 }
 
 // DataExchange 实现两个 net.Conn 之间的双向数据交换，支持空闲超时
