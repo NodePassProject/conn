@@ -25,9 +25,10 @@ func (tr *TimeoutReader) Read(b []byte) (int, error) {
 
 // RateLimiter 全局令牌桶读写限速器
 type RateLimiter struct {
-	readRate, writeRate     int64 // 每秒读取/写入字节数
-	readTokens, writeTokens int64 // 当前令牌数
-	lastUpdate              int64 // 上次更新时间
+	readRate, writeRate     int64      // 每秒读取/写入字节数
+	readTokens, writeTokens int64      // 当前令牌数
+	lastUpdate              int64      // 上次更新时间
+	condition               *sync.Cond // 条件变量
 }
 
 // NewRateLimiter 创建新的全局令牌桶读写限速器
@@ -47,6 +48,7 @@ func NewRateLimiter(readBytesPerSecond, writeBytesPerSecond int64) *RateLimiter 
 	rl := &RateLimiter{
 		readRate:  readBytesPerSecond,
 		writeRate: writeBytesPerSecond,
+		condition: sync.NewCond(&sync.Mutex{}),
 	}
 
 	// 使用原子操作初始化
@@ -79,6 +81,8 @@ func (rl *RateLimiter) waitTokens(bytes int64, tokens *int64) {
 		return
 	}
 
+	rl.condition.L.Lock()
+	defer rl.condition.L.Unlock()
 	for {
 		rl.refillTokens()
 
@@ -87,8 +91,8 @@ func (rl *RateLimiter) waitTokens(bytes int64, tokens *int64) {
 			atomic.CompareAndSwapInt64(tokens, curr, curr-bytes) {
 			return
 		}
-
-		time.Sleep(time.Millisecond)
+		// 等待令牌
+		rl.condition.Wait()
 	}
 }
 
@@ -105,6 +109,9 @@ func (rl *RateLimiter) refillTokens() {
 
 		rl.addTokens(&rl.readTokens, readAdd, rl.readRate)
 		rl.addTokens(&rl.writeTokens, writeAdd, rl.writeRate)
+
+		// 通知等待的协程
+		rl.condition.Broadcast()
 	}
 }
 
