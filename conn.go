@@ -88,7 +88,7 @@ func (rl *RateLimiter) waitTokens(bytes int64, tokens *int64) {
 			return
 		}
 
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(time.Millisecond)
 	}
 }
 
