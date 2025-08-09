@@ -12,6 +12,8 @@ A simple and efficient TCP connection data exchange utility for Go applications.
 - Efficient error handling and resource management
 - `TimeoutReader` for per-read timeout control
 - `StatConn` for connection statistics tracking (RX/TX bytes)
+- `RateLimiter` for bandwidth control using token bucket algorithm
+- Global rate limiting with separate read/write speed controls
 
 ## Installation
 
@@ -31,6 +33,7 @@ import (
     "net"
     "time"
     "io"
+    "sync/atomic"
 
     "github.com/NodePassProject/conn"
 )
@@ -51,14 +54,25 @@ func main() {
     }
     defer conn2.Close()
 
+    // Optional: Create rate limiter (1MB/s read, 512KB/s write)
+    rateLimiter := conn.NewRateLimiter(1024*1024, 512*1024)
+
+    // Optional: Wrap connections with StatConn for statistics and rate limiting
+    var rx1, tx1, rx2, tx2 uint64
+    statConn1 := &conn.StatConn{Conn: conn1, RX: &rx1, TX: &tx1, Rate: rateLimiter}
+    statConn2 := &conn.StatConn{Conn: conn2, RX: &rx2, TX: &tx2, Rate: rateLimiter}
+
     // Exchange data between the two connections with a 5-second idle timeout
-    bytesAtoB, bytesBtoA, err := conn.DataExchange(conn1, conn2, 5*time.Second)
+    bytesAtoB, bytesBtoA, err := conn.DataExchange(statConn1, statConn2, 5*time.Second)
     if err != nil && err != io.EOF {
         fmt.Printf("Data exchange error: %v\n", err)
     }
 
     fmt.Printf("Transferred %d bytes from server1 to server2\n", bytesAtoB)
     fmt.Printf("Transferred %d bytes from server2 to server1\n", bytesBtoA)
+    fmt.Printf("Total RX: %d bytes, Total TX: %d bytes\n", 
+        atomic.LoadUint64(&rx1)+atomic.LoadUint64(&rx2),
+        atomic.LoadUint64(&tx1)+atomic.LoadUint64(&tx2))
 }
 ```
 
@@ -76,7 +90,7 @@ n, err := tr.Read(buf)
 
 ### StatConn
 
-`StatConn` is a wrapper for `net.Conn` that tracks connection statistics (received and transmitted bytes). It implements the `net.Conn` interface and can be used as a drop-in replacement:
+`StatConn` is a wrapper for `net.Conn` that tracks connection statistics (received and transmitted bytes) and supports optional rate limiting. It implements the `net.Conn` interface and can be used as a drop-in replacement:
 
 ```go
 import (
@@ -84,6 +98,7 @@ import (
     "github.com/NodePassProject/conn"
 )
 
+// Basic usage without rate limiting
 var rxBytes, txBytes uint64
 statConn := &conn.StatConn{
     Conn: tcpConn,
@@ -91,12 +106,67 @@ statConn := &conn.StatConn{
     TX:   &txBytes,
 }
 
+// Usage with rate limiting (1MB/s read, 512KB/s write)
+rateLimiter := conn.NewRateLimiter(1024*1024, 512*1024)
+statConnWithLimit := &conn.StatConn{
+    Conn: tcpConn,
+    RX:   &rxBytes,
+    TX:   &txBytes,
+    Rate: rateLimiter, // Enable rate limiting
+}
+
 // Use statConn like a normal net.Conn
 // The rxBytes and txBytes variables will be updated automatically
-n, err := statConn.Write(data)
+// Rate limiting is applied automatically if Rate is set
+n, err := statConnWithLimit.Write(data)
 fmt.Printf("Total bytes sent: %d\n", atomic.LoadUint64(&txBytes))
 fmt.Printf("Total bytes received: %d\n", atomic.LoadUint64(&rxBytes))
 ```
+
+### RateLimiter
+
+`RateLimiter` implements a token bucket algorithm for bandwidth control. It supports separate rate limiting for read and write operations:
+
+```go
+import "github.com/NodePassProject/conn"
+
+// Create a rate limiter with 1MB/s read and 512KB/s write limits
+rateLimiter := conn.NewRateLimiter(1024*1024, 512*1024)
+
+// Use with StatConn for automatic rate limiting
+var rxBytes, txBytes uint64
+statConn := &conn.StatConn{
+    Conn: tcpConn,
+    RX:   &rxBytes,
+    TX:   &txBytes,
+    Rate: rateLimiter, // Enable rate limiting
+}
+
+// All read/write operations will be automatically rate limited
+data := make([]byte, 4096)
+n, err := statConn.Read(data)  // Automatically applies read rate limit
+n, err = statConn.Write(data)  // Automatically applies write rate limit
+```
+
+You can also use the rate limiter directly:
+
+```go
+rateLimiter := conn.NewRateLimiter(1024*1024, 512*1024)
+
+// Manual rate limiting
+dataSize := int64(len(data))
+rateLimiter.WaitWrite(dataSize)  // Wait for write tokens
+n, err := conn.Write(data)
+
+rateLimiter.WaitRead(int64(n))   // Wait for read tokens (if needed)
+```
+
+**Rate Limiter Features:**
+- Token bucket algorithm for smooth traffic shaping
+- Separate read and write rate controls
+- Thread-safe implementation using atomic operations
+- Zero value means unlimited rate (set to 0 or negative values)
+- Automatic token refill based on configured rates
 
 ## License
 

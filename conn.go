@@ -23,24 +23,134 @@ func (tr *TimeoutReader) Read(b []byte) (int, error) {
 	return tr.Conn.Read(b)
 }
 
-// StatConn 是一个包装了 net.Conn 的结构体，用于统计读取和写入的字节数
+// RateLimiter 全局令牌桶读写限速器
+type RateLimiter struct {
+	readRate, writeRate     int64 // 每秒读取/写入字节数
+	readTokens, writeTokens int64 // 当前令牌数
+	lastUpdate              int64 // 上次更新时间
+}
+
+// NewRateLimiter 创建新的全局令牌桶读写限速器
+func NewRateLimiter(readBytesPerSecond, writeBytesPerSecond int64) *RateLimiter {
+	if readBytesPerSecond <= 0 && writeBytesPerSecond <= 0 {
+		return nil
+	}
+
+	// 如果某个速率为0，设置为无限制
+	if readBytesPerSecond <= 0 {
+		readBytesPerSecond = 1 << 40 // 1TB/s
+	}
+	if writeBytesPerSecond <= 0 {
+		writeBytesPerSecond = 1 << 40 // 1TB/s
+	}
+
+	rl := &RateLimiter{
+		readRate:  readBytesPerSecond,
+		writeRate: writeBytesPerSecond,
+	}
+
+	// 使用原子操作初始化
+	atomic.StoreInt64(&rl.readTokens, readBytesPerSecond)
+	atomic.StoreInt64(&rl.writeTokens, writeBytesPerSecond)
+	atomic.StoreInt64(&rl.lastUpdate, time.Now().UnixNano())
+
+	return rl
+}
+
+// WaitRead 等待读取令牌
+func (rl *RateLimiter) WaitRead(bytes int64) {
+	if rl == nil || bytes <= 0 {
+		return
+	}
+	rl.waitTokens(bytes, &rl.readTokens)
+}
+
+// WaitWrite 等待写入令牌
+func (rl *RateLimiter) WaitWrite(bytes int64) {
+	if rl == nil || bytes <= 0 {
+		return
+	}
+	rl.waitTokens(bytes, &rl.writeTokens)
+}
+
+// waitTokens 等待令牌
+func (rl *RateLimiter) waitTokens(bytes int64, tokens *int64) {
+	if rl == nil || bytes <= 0 {
+		return
+	}
+
+	for {
+		rl.refillTokens()
+
+		// 原子获取并消耗令牌
+		if curr := atomic.LoadInt64(tokens); curr >= bytes &&
+			atomic.CompareAndSwapInt64(tokens, curr, curr-bytes) {
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// refillTokens 更新令牌
+func (rl *RateLimiter) refillTokens() {
+	now := time.Now().UnixNano()
+	last := atomic.LoadInt64(&rl.lastUpdate)
+
+	if elapsed := now - last; elapsed > 0 && atomic.CompareAndSwapInt64(&rl.lastUpdate, last, now) {
+		// 更新读写令牌
+		elapsedSeconds := float64(elapsed) / float64(time.Second)
+		readAdd := int64(float64(rl.readRate) * elapsedSeconds)
+		writeAdd := int64(float64(rl.writeRate) * elapsedSeconds)
+
+		rl.addTokens(&rl.readTokens, readAdd, rl.readRate)
+		rl.addTokens(&rl.writeTokens, writeAdd, rl.writeRate)
+	}
+}
+
+// addTokens 添加令牌
+func (rl *RateLimiter) addTokens(tokens *int64, add, max int64) {
+	if add <= 0 {
+		return
+	}
+	for {
+		curr := atomic.LoadInt64(tokens)
+		newVal := min(curr+add, max)
+		if atomic.CompareAndSwapInt64(tokens, curr, newVal) {
+			break
+		}
+	}
+}
+
+// StatConn 是一个包装了 net.Conn 的结构体，用于统计并限制读取和写入的字节数
 type StatConn struct {
 	Conn net.Conn
 	RX   *uint64
 	TX   *uint64
+	Rate *RateLimiter
 }
 
-// Read 实现了 io.Reader 接口，读取数据时会统计读取字节数
+// Read 实现了 io.Reader 接口，读取数据时会统计读取字节数并进行限速
 func (sc *StatConn) Read(b []byte) (int, error) {
 	n, err := sc.Conn.Read(b)
-	atomic.AddUint64(sc.RX, uint64(n))
+	if n > 0 {
+		atomic.AddUint64(sc.RX, uint64(n))
+		if sc.Rate != nil {
+			sc.Rate.WaitRead(int64(n))
+		}
+	}
 	return n, err
 }
 
-// Write 实现了 io.Writer 接口，写入数据时会统计写入字节数
+// Write 实现了 io.Writer 接口，写入数据时会统计写入字节数并进行限速
 func (sc *StatConn) Write(b []byte) (int, error) {
+	if sc.Rate != nil {
+		sc.Rate.WaitWrite(int64(len(b)))
+	}
 	n, err := sc.Conn.Write(b)
-	atomic.AddUint64(sc.TX, uint64(n))
+	if n > 0 {
+		atomic.AddUint64(sc.TX, uint64(n))
+	}
 	return n, err
 }
 
