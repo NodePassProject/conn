@@ -281,32 +281,29 @@ func (sc *StatConn) Reset() {
 }
 
 // DataExchange 实现两个 net.Conn 之间的双向数据交换，支持空闲超时
-func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration) (int64, int64, error) {
+func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration) error {
 	// 连接有效性检查
 	if conn1 == nil || conn2 == nil {
-		return 0, 0, io.ErrUnexpectedEOF
+		return io.ErrUnexpectedEOF
 	}
 
 	var (
-		sum1, sum2 int64
-		wg         sync.WaitGroup
-		errChan    = make(chan error, 2)
+		wg      sync.WaitGroup
+		errChan = make(chan error, 2)
 	)
 
 	// 定义一个函数用于双向数据传输
-	copyData := func(src, dst net.Conn, sum *int64) {
+	copyData := func(src, dst net.Conn) {
 		defer wg.Done()
 		reader := &TimeoutReader{Conn: src, Timeout: idleTimeout}
-		n, err := io.Copy(dst, reader)
-		*sum = n
+		_, err := io.Copy(dst, reader)
 		errChan <- err
 	}
 
 	// 启动双向数据传输
 	wg.Add(2)
-	go copyData(conn1, conn2, &sum1)
-	go copyData(conn2, conn1, &sum2)
-
+	go copyData(conn1, conn2)
+	go copyData(conn2, conn1)
 	wg.Wait()
 	close(errChan)
 
@@ -318,9 +315,9 @@ func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration) (int64, int6
 
 	for err := range errChan {
 		if err != nil {
-			return sum1, sum2, err
+			return err
 		}
 	}
 
-	return sum1, sum2, io.EOF
+	return io.EOF
 }

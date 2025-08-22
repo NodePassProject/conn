@@ -32,9 +32,6 @@ import (
     "fmt"
     "net"
     "time"
-    "io"
-    "sync/atomic"
-
     "github.com/NodePassProject/conn"
 )
 
@@ -58,21 +55,14 @@ func main() {
     rateLimiter := conn.NewRateLimiter(1024*1024, 512*1024)
 
     // Optional: Wrap connections with StatConn for statistics and rate limiting
-    var rx1, tx1, rx2, tx2 uint64
-    statConn1 := &conn.StatConn{Conn: conn1, RX: &rx1, TX: &tx1, Rate: rateLimiter}
-    statConn2 := &conn.StatConn{Conn: conn2, RX: &rx2, TX: &tx2, Rate: rateLimiter}
+    statConn1 := &conn.StatConn{Conn: conn1, Rate: rateLimiter}
+    statConn2 := &conn.StatConn{Conn: conn2, Rate: rateLimiter}
 
     // Exchange data between the two connections with a 5-second idle timeout
-    bytesAtoB, bytesBtoA, err := conn.DataExchange(statConn1, statConn2, 5*time.Second)
-    if err != nil && err != io.EOF {
+    err = conn.DataExchange(statConn1, statConn2, 5*time.Second)
+    if err != nil && err.Error() != "EOF" {
         fmt.Printf("Data exchange error: %v\n", err)
     }
-
-    fmt.Printf("Transferred %d bytes from server1 to server2\n", bytesAtoB)
-    fmt.Printf("Transferred %d bytes from server2 to server1\n", bytesBtoA)
-    fmt.Printf("Total RX: %d bytes, Total TX: %d bytes\n", 
-        atomic.LoadUint64(&rx1)+atomic.LoadUint64(&rx2),
-        atomic.LoadUint64(&tx1)+atomic.LoadUint64(&tx2))
 }
 ```
 
