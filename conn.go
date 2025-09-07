@@ -280,6 +280,27 @@ func (sc *StatConn) Reset() {
 	atomic.StoreUint64(sc.TX, 0)
 }
 
+// Unwrap 返回底层的 net.Conn，用于类型断言
+func (sc *StatConn) Unwrap() net.Conn {
+	return sc.Conn
+}
+
+// AsTCPConn 安全地将底层连接转换为 *net.TCPConn
+func (sc *StatConn) AsTCPConn() (*net.TCPConn, bool) {
+	if tcpConn, ok := sc.Conn.(*net.TCPConn); ok {
+		return tcpConn, true
+	}
+	return nil, false
+}
+
+// AsUDPConn 安全地将底层连接转换为 *net.UDPConn
+func (sc *StatConn) AsUDPConn() (*net.UDPConn, bool) {
+	if udpConn, ok := sc.Conn.(*net.UDPConn); ok {
+		return udpConn, true
+	}
+	return nil, false
+}
+
 // DataExchange 实现两个 net.Conn 之间的双向数据交换，支持空闲超时
 func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration) error {
 	// 连接有效性检查
