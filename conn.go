@@ -2,11 +2,18 @@
 package conn
 
 import (
+	"errors"
 	"io"
 	"net"
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+// 定义错误
+var (
+	ErrNotTCPConn = errors.New("not a TCP connection")
+	ErrNotUDPConn = errors.New("not a UDP connection")
 )
 
 // TimeoutReader 包装了 net.Conn，支持设置读取超时
@@ -280,11 +287,6 @@ func (sc *StatConn) Reset() {
 	atomic.StoreUint64(sc.TX, 0)
 }
 
-// Unwrap 返回底层的 net.Conn，用于类型断言
-func (sc *StatConn) Unwrap() net.Conn {
-	return sc.Conn
-}
-
 // AsTCPConn 安全地将底层连接转换为 *net.TCPConn
 func (sc *StatConn) AsTCPConn() (*net.TCPConn, bool) {
 	if tcpConn, ok := sc.Conn.(*net.TCPConn); ok {
@@ -299,6 +301,152 @@ func (sc *StatConn) AsUDPConn() (*net.UDPConn, bool) {
 		return udpConn, true
 	}
 	return nil, false
+}
+
+// SetKeepAlive 设置TCP连接的KeepAlive状态
+func (sc *StatConn) SetKeepAlive(keepalive bool) error {
+	if tcpConn, ok := sc.AsTCPConn(); ok {
+		return tcpConn.SetKeepAlive(keepalive)
+	}
+	return &net.OpError{Op: "set", Net: "tcp", Err: ErrNotTCPConn}
+}
+
+// SetKeepAlivePeriod 设置TCP连接的KeepAlive周期
+func (sc *StatConn) SetKeepAlivePeriod(d time.Duration) error {
+	if tcpConn, ok := sc.AsTCPConn(); ok {
+		return tcpConn.SetKeepAlivePeriod(d)
+	}
+	return &net.OpError{Op: "set", Net: "tcp", Err: ErrNotTCPConn}
+}
+
+// SetNoDelay 设置TCP连接的NoDelay状态（禁用/启用Nagle算法）
+func (sc *StatConn) SetNoDelay(noDelay bool) error {
+	if tcpConn, ok := sc.AsTCPConn(); ok {
+		return tcpConn.SetNoDelay(noDelay)
+	}
+	return &net.OpError{Op: "set", Net: "tcp", Err: ErrNotTCPConn}
+}
+
+// SetLinger 设置TCP连接的Linger时间
+func (sc *StatConn) SetLinger(sec int) error {
+	if tcpConn, ok := sc.AsTCPConn(); ok {
+		return tcpConn.SetLinger(sec)
+	}
+	return &net.OpError{Op: "set", Net: "tcp", Err: ErrNotTCPConn}
+}
+
+// CloseRead 关闭TCP连接的读取端
+func (sc *StatConn) CloseRead() error {
+	if tcpConn, ok := sc.AsTCPConn(); ok {
+		return tcpConn.CloseRead()
+	}
+	return &net.OpError{Op: "close", Net: "tcp", Err: ErrNotTCPConn}
+}
+
+// CloseWrite 关闭TCP连接的写入端
+func (sc *StatConn) CloseWrite() error {
+	if tcpConn, ok := sc.AsTCPConn(); ok {
+		return tcpConn.CloseWrite()
+	}
+	return &net.OpError{Op: "close", Net: "tcp", Err: ErrNotTCPConn}
+}
+
+// ReadFromUDP 从UDP连接读取数据包，返回数据和发送方地址
+func (sc *StatConn) ReadFromUDP(b []byte) (int, *net.UDPAddr, error) {
+	if udpConn, ok := sc.AsUDPConn(); ok {
+		n, addr, err := udpConn.ReadFromUDP(b)
+		if n > 0 {
+			atomic.AddUint64(sc.RX, uint64(n))
+			if sc.Rate != nil {
+				sc.Rate.WaitRead(int64(n))
+			}
+		}
+		return n, addr, err
+	}
+	return 0, nil, &net.OpError{Op: "read", Net: "udp", Err: ErrNotUDPConn}
+}
+
+// WriteToUDP 向指定UDP地址发送数据包
+func (sc *StatConn) WriteToUDP(b []byte, addr *net.UDPAddr) (int, error) {
+	if udpConn, ok := sc.AsUDPConn(); ok {
+		if sc.Rate != nil {
+			sc.Rate.WaitWrite(int64(len(b)))
+		}
+		n, err := udpConn.WriteToUDP(b, addr)
+		if n > 0 {
+			atomic.AddUint64(sc.TX, uint64(n))
+		}
+		return n, err
+	}
+	return 0, &net.OpError{Op: "write", Net: "udp", Err: ErrNotUDPConn}
+}
+
+// ReadMsgUDP 从UDP连接读取消息，支持读取控制信息
+func (sc *StatConn) ReadMsgUDP(b, oob []byte) (n, oobn, flags int, addr *net.UDPAddr, err error) {
+	if udpConn, ok := sc.AsUDPConn(); ok {
+		n, oobn, flags, addr, err = udpConn.ReadMsgUDP(b, oob)
+		if n > 0 {
+			atomic.AddUint64(sc.RX, uint64(n))
+			if sc.Rate != nil {
+				sc.Rate.WaitRead(int64(n))
+			}
+		}
+		return n, oobn, flags, addr, err
+	}
+	return 0, 0, 0, nil, &net.OpError{Op: "read", Net: "udp", Err: ErrNotUDPConn}
+}
+
+// WriteMsgUDP 向UDP连接发送消息，支持发送控制信息
+func (sc *StatConn) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
+	if udpConn, ok := sc.AsUDPConn(); ok {
+		if sc.Rate != nil {
+			sc.Rate.WaitWrite(int64(len(b)))
+		}
+		n, oobn, err = udpConn.WriteMsgUDP(b, oob, addr)
+		if n > 0 {
+			atomic.AddUint64(sc.TX, uint64(n))
+		}
+		return n, oobn, err
+	}
+	return 0, 0, &net.OpError{Op: "write", Net: "udp", Err: ErrNotUDPConn}
+}
+
+// SetReadBuffer 设置UDP连接的读取缓冲区大小
+func (sc *StatConn) SetReadBuffer(bytes int) error {
+	if udpConn, ok := sc.AsUDPConn(); ok {
+		return udpConn.SetReadBuffer(bytes)
+	}
+	return &net.OpError{Op: "set", Net: "udp", Err: ErrNotUDPConn}
+}
+
+// SetWriteBuffer 设置UDP连接的写入缓冲区大小
+func (sc *StatConn) SetWriteBuffer(bytes int) error {
+	if udpConn, ok := sc.AsUDPConn(); ok {
+		return udpConn.SetWriteBuffer(bytes)
+	}
+	return &net.OpError{Op: "set", Net: "udp", Err: ErrNotUDPConn}
+}
+
+// IsTCP 检查底层连接是否为TCP连接
+func (sc *StatConn) IsTCP() bool {
+	_, ok := sc.AsTCPConn()
+	return ok
+}
+
+// IsUDP 检查底层连接是否为UDP连接
+func (sc *StatConn) IsUDP() bool {
+	_, ok := sc.AsUDPConn()
+	return ok
+}
+
+// NetworkType 返回底层连接的网络类型
+func (sc *StatConn) NetworkType() string {
+	if sc.IsTCP() {
+		return "tcp"
+	} else if sc.IsUDP() {
+		return "udp"
+	}
+	return "unknown"
 }
 
 // DataExchange 实现两个 net.Conn 之间的双向数据交换，支持空闲超时
