@@ -70,11 +70,12 @@ func main() {
         statConn1.SetNoDelay(true) // Disable Nagle algorithm for low latency
     }
 
-    // Create custom buffer for better performance (optional, nil uses default)
-    buffer := make([]byte, 64*1024) // 64KB buffer
+    // Create separate custom buffers for better performance (optional, nil uses default)
+    buffer1 := make([]byte, 64*1024) // 64KB buffer for conn1→conn2
+    buffer2 := make([]byte, 64*1024) // 64KB buffer for conn2→conn1
     
-    // Exchange data between the two connections with a 5-second idle timeout and custom buffer
-    err = conn.DataExchange(statConn1, statConn2, 5*time.Second, buffer)
+    // Exchange data between the two connections with a 5-second idle timeout and custom buffers
+    err = conn.DataExchange(statConn1, statConn2, 5*time.Second, buffer1, buffer2)
     if err != nil && err.Error() != "EOF" {
         fmt.Printf("Data exchange error: %v\n", err)
     }
@@ -90,37 +91,46 @@ func main() {
 The `DataExchange` function supports customizable buffer sizes for optimized performance:
 
 ```go
-func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer []byte) error
+func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer1, buffer2 []byte) error
 ```
 
 **Parameters:**
 - `conn1`, `conn2`: The two connections to exchange data between
 - `idleTimeout`: Maximum idle time before timeout (use `0` for no timeout)
-- `buffer`: Custom buffer for data copying (pass `nil` to use default buffer)
+- `buffer1`: Custom buffer for conn1→conn2 direction (pass `nil` to use default buffer)
+- `buffer2`: Custom buffer for conn2→conn1 direction (pass `nil` to use default buffer)
 
 **Buffer Configuration:**
-- **Default buffer (`nil`)**: Uses Go's internal default buffer size (typically 32KB)
-- **Custom buffer**: Allows optimization for specific use cases:
+- **Default buffers (`nil`, `nil`)**: Uses Go's internal default buffer size (typically 32KB) for both directions
+- **Custom buffers**: Allows optimization for specific use cases:
   - Larger buffers (64KB+) for high-throughput connections
   - Smaller buffers for memory-constrained environments
-  - The same buffer is shared between both directions for memory efficiency
+  - Different buffer sizes for each direction to optimize asymmetric traffic patterns
+  - **Important**: Each direction must use a separate buffer to avoid concurrent access issues
 
 **Example buffer configurations:**
 
 ```go
-// Use default buffer
-err := conn.DataExchange(conn1, conn2, 30*time.Second, nil)
+// Use default buffers for both directions
+err := conn.DataExchange(conn1, conn2, 30*time.Second, nil, nil)
 
-// High-throughput scenario
-largeBuffer := make([]byte, 128*1024) // 128KB
-err := conn.DataExchange(conn1, conn2, 30*time.Second, largeBuffer)
+// High-throughput scenario with separate large buffers
+largeBuffer1 := make([]byte, 128*1024) // 128KB for conn1→conn2
+largeBuffer2 := make([]byte, 128*1024) // 128KB for conn2→conn1
+err := conn.DataExchange(conn1, conn2, 30*time.Second, largeBuffer1, largeBuffer2)
 
-// Memory-constrained scenario  
-smallBuffer := make([]byte, 8*1024) // 8KB
-err := conn.DataExchange(conn1, conn2, 30*time.Second, smallBuffer)
+// Asymmetric buffers for different traffic patterns
+uploadBuffer := make([]byte, 32*1024)   // 32KB for conn1→conn2
+downloadBuffer := make([]byte, 128*1024) // 128KB for conn2→conn1
+err := conn.DataExchange(conn1, conn2, 30*time.Second, uploadBuffer, downloadBuffer)
 
-// No timeout with custom buffer
-err := conn.DataExchange(conn1, conn2, 0, make([]byte, 32*1024))
+// Memory-constrained scenario with separate small buffers
+smallBuffer1 := make([]byte, 8*1024) // 8KB for conn1→conn2
+smallBuffer2 := make([]byte, 8*1024) // 8KB for conn2→conn1
+err := conn.DataExchange(conn1, conn2, 30*time.Second, smallBuffer1, smallBuffer2)
+
+// No timeout with custom buffers
+err := conn.DataExchange(conn1, conn2, 0, make([]byte, 32*1024), make([]byte, 64*1024))
 ```
 
 ### TimeoutReader
@@ -334,10 +344,11 @@ func handleConnection(clientConn net.Conn) {
         statServer.SetNoDelay(true)
     }
     
-    // Start data exchange with 60-second idle timeout and custom buffer
+    // Start data exchange with 60-second idle timeout and custom buffers
     start := time.Now()
-    buffer := make([]byte, 32*1024) // 32KB buffer for better performance
-    err = conn.DataExchange(statClient, statServer, 60*time.Second, buffer)
+    buffer1 := make([]byte, 32*1024) // 32KB buffer for client→server
+    buffer2 := make([]byte, 32*1024) // 32KB buffer for server→client
+    err = conn.DataExchange(statClient, statServer, 60*time.Second, buffer1, buffer2)
     duration := time.Since(start)
     
     // Log statistics

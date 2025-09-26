@@ -450,7 +450,7 @@ func (sc *StatConn) NetworkType() string {
 }
 
 // DataExchange 实现两个双向数据交换，支持空闲超时, 自定义缓冲区
-func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer []byte) error {
+func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer1, buffer2 []byte) error {
 	// 连接有效性检查
 	if conn1 == nil || conn2 == nil {
 		return io.ErrUnexpectedEOF
@@ -462,7 +462,7 @@ func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer []byt
 	)
 
 	// 定义一个函数用于双向数据传输
-	copyData := func(src, dst net.Conn) {
+	copyData := func(src, dst net.Conn, buffer []byte) {
 		defer wg.Done()
 		reader := &TimeoutReader{Conn: src, Timeout: idleTimeout}
 		_, err := io.CopyBuffer(dst, reader, buffer)
@@ -471,8 +471,8 @@ func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer []byt
 
 	// 启动双向数据传输
 	wg.Add(2)
-	go copyData(conn1, conn2)
-	go copyData(conn2, conn1)
+	go copyData(conn1, conn2, buffer1)
+	go copyData(conn2, conn1, buffer2)
 	wg.Wait()
 	close(errChan)
 
