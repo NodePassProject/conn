@@ -9,7 +9,8 @@ A comprehensive Go package for network connection management with advanced featu
 
 - Thread-safe, bidirectional data exchange between network connections
 - Idle timeout support for automatic connection cleanup
-- Efficient error handling and resource management
+- Customizable buffer size for optimized performance in data exchange
+- Efficient error handling and resource management with connection validation
 - `TimeoutReader` for per-read timeout control
 - `StatConn` for connection statistics tracking (RX/TX bytes) with protocol-specific methods
 - `RateLimiter` for bandwidth control using token bucket algorithm
@@ -69,8 +70,11 @@ func main() {
         statConn1.SetNoDelay(true) // Disable Nagle algorithm for low latency
     }
 
-    // Exchange data between the two connections with a 5-second idle timeout
-    err = conn.DataExchange(statConn1, statConn2, 5*time.Second)
+    // Create custom buffer for better performance (optional, nil uses default)
+    buffer := make([]byte, 64*1024) // 64KB buffer
+    
+    // Exchange data between the two connections with a 5-second idle timeout and custom buffer
+    err = conn.DataExchange(statConn1, statConn2, 5*time.Second, buffer)
     if err != nil && err.Error() != "EOF" {
         fmt.Printf("Data exchange error: %v\n", err)
     }
@@ -79,6 +83,44 @@ func main() {
     fmt.Printf("Conn1 - RX: %d bytes, TX: %d bytes\n", statConn1.GetRX(), statConn1.GetTX())
     fmt.Printf("Conn2 - RX: %d bytes, TX: %d bytes\n", statConn2.GetRX(), statConn2.GetTX())
 }
+```
+
+### DataExchange Function
+
+The `DataExchange` function supports customizable buffer sizes for optimized performance:
+
+```go
+func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer []byte) error
+```
+
+**Parameters:**
+- `conn1`, `conn2`: The two connections to exchange data between
+- `idleTimeout`: Maximum idle time before timeout (use `0` for no timeout)
+- `buffer`: Custom buffer for data copying (pass `nil` to use default buffer)
+
+**Buffer Configuration:**
+- **Default buffer (`nil`)**: Uses Go's internal default buffer size (typically 32KB)
+- **Custom buffer**: Allows optimization for specific use cases:
+  - Larger buffers (64KB+) for high-throughput connections
+  - Smaller buffers for memory-constrained environments
+  - The same buffer is shared between both directions for memory efficiency
+
+**Example buffer configurations:**
+
+```go
+// Use default buffer
+err := conn.DataExchange(conn1, conn2, 30*time.Second, nil)
+
+// High-throughput scenario
+largeBuffer := make([]byte, 128*1024) // 128KB
+err := conn.DataExchange(conn1, conn2, 30*time.Second, largeBuffer)
+
+// Memory-constrained scenario  
+smallBuffer := make([]byte, 8*1024) // 8KB
+err := conn.DataExchange(conn1, conn2, 30*time.Second, smallBuffer)
+
+// No timeout with custom buffer
+err := conn.DataExchange(conn1, conn2, 0, make([]byte, 32*1024))
 ```
 
 ### TimeoutReader
@@ -229,6 +271,12 @@ rateLimiter.WaitWrite(dataSize)  // Wait for write tokens
 n, err := conn.Write(data)
 
 rateLimiter.WaitRead(int64(n))   // Wait for read tokens (if needed)
+
+// Dynamic rate adjustment
+rateLimiter.SetRate(2*1024*1024, 1024*1024) // Change to 2MB/s read, 1MB/s write
+
+// Reset rate limiter state
+rateLimiter.Reset() // Clear all tokens and restart
 ```
 
 **Rate Limiter Features:**
@@ -237,6 +285,8 @@ rateLimiter.WaitRead(int64(n))   // Wait for read tokens (if needed)
 - Thread-safe implementation using atomic operations
 - Zero value means unlimited rate (set to 0 or negative values)
 - Automatic token refill based on configured rates
+- Dynamic rate adjustment with `SetRate()` method
+- State reset capability with `Reset()` method
 
 ## Complete Examples
 
@@ -284,9 +334,10 @@ func handleConnection(clientConn net.Conn) {
         statServer.SetNoDelay(true)
     }
     
-    // Start data exchange with 60-second idle timeout
+    // Start data exchange with 60-second idle timeout and custom buffer
     start := time.Now()
-    err = conn.DataExchange(statClient, statServer, 60*time.Second)
+    buffer := make([]byte, 32*1024) // 32KB buffer for better performance
+    err = conn.DataExchange(statClient, statServer, 60*time.Second, buffer)
     duration := time.Since(start)
     
     // Log statistics
