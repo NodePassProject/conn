@@ -449,6 +449,25 @@ func (sc *StatConn) NetworkType() string {
 	return "unknown"
 }
 
+// TCP缓冲区池
+var tcpBufferPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, 32*1024)
+		return &b
+	},
+}
+
+// getTCPBuffer 获取一个TCP缓冲区
+func getTCPBuffer() []byte {
+	buf := tcpBufferPool.Get().(*[]byte)
+	return *buf
+}
+
+// putTCPBuffer 归还一个TCP缓冲区
+func putTCPBuffer(buf []byte) {
+	tcpBufferPool.Put(&buf)
+}
+
 // DataExchange 实现两个 net.Conn 之间的双向数据交换，支持空闲超时
 func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration) error {
 	// 连接有效性检查
@@ -464,8 +483,10 @@ func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration) error {
 	// 定义一个函数用于双向数据传输
 	copyData := func(src, dst net.Conn) {
 		defer wg.Done()
+		buffer := getTCPBuffer()
+		defer putTCPBuffer(buffer)
 		reader := &TimeoutReader{Conn: src, Timeout: idleTimeout}
-		_, err := io.Copy(dst, reader)
+		_, err := io.CopyBuffer(dst, reader, buffer)
 		errChan <- err
 	}
 
