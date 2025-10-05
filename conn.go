@@ -16,20 +16,6 @@ var (
 	ErrNotUDPConn = errors.New("not a UDP connection")
 )
 
-// TimeoutReader 包装了 net.Conn，支持设置读取超时
-type TimeoutReader struct {
-	Conn    net.Conn
-	Timeout time.Duration
-}
-
-// Read 实现了 io.Reader 接口，读取数据时会设置读取超时
-func (tr *TimeoutReader) Read(b []byte) (int, error) {
-	if tr.Timeout > 0 {
-		tr.Conn.SetReadDeadline(time.Now().Add(tr.Timeout))
-	}
-	return tr.Conn.Read(b)
-}
-
 // RateLimiter 全局令牌桶读写限速器
 type RateLimiter struct {
 	readRate, writeRate     int64      // 每秒读取/写入字节数
@@ -449,6 +435,20 @@ func (sc *StatConn) NetworkType() string {
 	return "unknown"
 }
 
+// TimeoutReader 包装了 net.Conn，支持设置读取超时
+type TimeoutReader struct {
+	Conn    net.Conn
+	Timeout time.Duration
+}
+
+// Read 实现了 io.Reader 接口，读取数据时会设置读取超时
+func (tr *TimeoutReader) Read(b []byte) (int, error) {
+	if tr.Timeout > 0 {
+		tr.Conn.SetReadDeadline(time.Now().Add(tr.Timeout))
+	}
+	return tr.Conn.Read(b)
+}
+
 // DataExchange 实现两个双向数据交换，支持空闲超时, 自定义缓冲区
 func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer1, buffer2 []byte) error {
 	// 连接有效性检查
@@ -456,17 +456,25 @@ func DataExchange(conn1, conn2 net.Conn, idleTimeout time.Duration, buffer1, buf
 		return io.ErrUnexpectedEOF
 	}
 
-	var (
-		wg      sync.WaitGroup
-		errChan = make(chan error, 2)
-	)
+	var wg sync.WaitGroup
+	errChan := make(chan error, 2)
 
 	// 定义一个函数用于双向数据传输
 	copyData := func(src, dst net.Conn, buffer []byte) {
 		defer wg.Done()
+
 		reader := &TimeoutReader{Conn: src, Timeout: idleTimeout}
 		_, err := io.CopyBuffer(dst, reader, buffer)
 		errChan <- err
+
+		if idleTimeout == 0 {
+			// 没有设置超时，传输结束后关闭写端
+			if tcpConn, ok := dst.(*net.TCPConn); ok {
+				tcpConn.CloseWrite()
+			} else {
+				dst.Close()
+			}
+		}
 	}
 
 	// 启动双向数据传输
